@@ -1,0 +1,168 @@
+#!/bin/bash
+
+###
+#
+#  File:  bro.ids.installation.centos.23MAR18.bash.txt
+#  Purpose: Automate Bro IDS install with JA3 hash plugin
+#  Author: rac3rx
+#  Date:  17:36/23Mar18
+#
+###
+
+#
+#  Maintenance Record and versioning
+#
+#  eg "date" "coder's initials" "some tasks/correction to code"
+#  23MAR18    rac3rx    TODO: [ ] find some missing code updated (file locations) at home; hehe ... to many disparaged networks
+#                             [ ] PF_RING
+#                             [ ] curl
+#                             [ ] Test script
+#                             [ ] ELK
+#                             [ ] Moloch
+
+
+# Install required dependencies for Bro NSM
+#sudo yum install cmake make gcc gcc-c++ flex bison libpcap-devel openssl-devel python-devel swig zlib-devel file-devel
+sudo yum install cmake make gcc gcc-c++ flex bison libpcap-devel openssl-devel python-devel swig zlib-devel
+
+
+# Install optional dependencies: C++ Actor Framework (CAF), LibGeoIP (geolocating IPs), sendmail (MTA), curl (in script), 
+# gperftools (tcmalloc improves memory & CPU usage), jemalloc,  PF_RING,  ipsumdump 
+# will install: LibGeoIP, curl, gperftools, PF_RING, ipsumdump
+## GeoIP  
+#sudo yum install GeoIP*                                        # wget all: GeoIP, GeoIP-devel, GeoIPcity, GeoIPv6
+wget http://geolite.maxmind.com/download/geoip/database/GeoLiteCity.dat.gz    
+wget http://geolite.maxmind.com/download/geoip/database/GeoLiteCityv6-beta/GeoLiteCityv6.dat.gz
+wget http://www.maxmind.com/download/geoip/api/c/GeoIP.tar.gz
+gzip -d GeoLiteCity.dat.gz                                          #unzip the database
+gzip -d GeoLiteCityv6.dat.gz
+# If we build Bro with LibGeoIP installed, but fail to link the files, we 
+# will see the following type of errors in /nsm/bro/logs/current/stderr.log
+sudo ln -s /usr/share/GeoIP/GeoLiteCity.dat /usr/share/GeoIP/GeoIPCity.dat
+sudo ln -s /usr/share/GeoIP/GeoLiteCityv6.dat /usr/share/GeoIP/GeoIPCityv6.dat
+# GeoIP - optional
+sudo yum install gawk
+sudo yum install gperftools
+wget https://github.com/gperftools/gperftools/archive/master.zip
+# IPSumDump - Download the latest version from here
+    wget http://www.read.seas.harvard.edu/~kohler/ipsumdump/ipsumdump-1.85.tar.gz
+    tar -xvf ipsumdump-1.85.tar.gz
+    cd ipsumdump-1.85
+    ./configure --prefix=/usr/
+    make
+    sudo make install
+
+    # by default bro will be install to /usr/local/bro/bin (/opt/bro)
+    #yum install bro
+    git clone --recursive git://git.bro.org/bro
+    wget https://www.bro.org/downloads/bro-2.5.3.tar.gz
+    tar -xvf bro-2.5.3
+    ./configure
+    #./configure --prefix=/~/.local
+    #./configure --with-*                                 ### locate a (newer) dependency
+    make
+    # make install-aux                                    ### install some of the other programs that are in the aux/bro-aux directory.
+    sudo make install
+
+# setup interfaces for BRO
+    INTERFACE=lo                                          ### move at top later once sorted out
+    PREFIX=/usr/localbro
+    BROCFG=/etc/bro
+
+    # ls /sys/class/net || ip a                           ### check interfaces to use for bro
+    # alt location of config files: /etc/bro/node.cfg
+    cp $PREFIX/etc/node.cfg $PREFIX/etc/node.cfg.`date '+%d%b%y'`
+    sed -i "s/eth0/$INTERFACE/g" $PREFIX/etc/node.cfg
+
+# broctl must be installed; verify path down below ????
+    #sudo yum install broctl
+    cp $PREFIX/etc/broctl.cfg $PREFIX/etc/broctl.cfg.`date '+%d%b%y'`
+    echo "#python site-packages for BroControl
+    LibDirInternal = /usr/lib/python2.7/site-packages/BroControl/" >> $PREFIX/etc/broctl.cfg
+
+# unnecessary if you want to leave spool, /var/log, & configs nested in default bro "install" location
+    if [ ! -d /var/spool ]; then
+      mkdir /var/spool
+    else
+      sed -i '/SpoolDir/d' $PREFIX/etc/broctl.cfg
+      echo "SpoolDir = /var/spool" >> $PREFIX/etc/broctl.cfg
+    fi
+
+    mkdir /var/log/bro
+    sed -i '/LogDir/d' $PREFIX/etc/broctl.cfg
+    echo "LogDir = /var/log/bro" >> /etc/bro/broctl.cfg
+
+    echo "CfgDir = /etc/bro" >> /etc/bro/broctl.cfg
+
+# bash_profile & add PATH statement for BRO
+    cp ~/.bash_profile ~/.bash_profile.`date '+%d%b%y'`
+    BASHBROPATH=\$PATH:/usr/local/bro/bin
+    if [[ $BASHBROPATH == `grep -oh '\$PATH:/usr/local/bro/bin' ~/.bash_profile` ]];
+    then 
+      sed -i '/\$PATH/s/$/\:\/usr\/local\/bro\/bin/' ~/.bash_profile
+    fi
+
+
+# JA3 hash plugin; get src files
+    PREFIX=/usr/local/bro
+    mkdir $PREFIX/share/bro/site/ja3
+    cd /usr/share/bro/site/ja3
+    wget https://raw.githubusercontent.com/salesforce/ja3/master/bro/intel_ja3.bro
+    wget https://raw.githubusercontent.com/salesforce/ja3/master/bro/ja3.bro
+    wget https://raw.githubusercontent.com/salesforce/ja3/master/bro/__load__.bro
+
+# configure BRO IDS to load the JA3 configuration
+    cp $PREFIX/share/bro/site/local.bro $PREFIX/share/bro/site/local.bro`date '+%d%b%y'`
+    echo "@load ./ja3" >> $PREFIX/share/bro/site/local.bro
+
+
+# default ja3.bro will only append ja3 to the ssl.log; to log all aspects of the SSL Client Hello Packet, 
+# uncomment the following lines in ja3.bro
+
+  #  ja3_version:  string &optional &log;
+  #  ja3_ciphers:  string &optional &log;
+  #  ja3_extensions: string &optional &log;
+  #  ja3_ec:         string &optional &log;
+  #  ja3_ec_fmt:     string &optional &log;
+  # ...
+  #c$ssl$ja3_version = cat(c$tlsfp$client_version);
+  #c$ssl$ja3_ciphers = c$tlsfp$client_ciphers;
+  #c$ssl$ja3_extensions = c$tlsfp$extensions;
+  #c$ssl$ja3_ec = c$tlsfp$e_curves;
+  #c$ssl$ja3_ec_fmt = c$tlsfp$ec_point_fmt;
+
+    # let's automate this
+    cp $PREFIX/share/bro/site/ja3/ja3.bro $PREFIX/share/bro/site/ja3/ja3.bro.`date '+%d%b%y'`
+    for i in version ciphers extensions ec ec_fmt; do sed -in "/^#\ *ja4_$i:/ s/#\ *//g" ja3.bro; done
+    for i in version ciphers extensions ec ec_fmt; do sed -in "/^#c\$ssl\$ja3_$i/ s/#\ *//g" ja3.bro; done
+
+# get ja3 hash db for linux and osx
+wget https://raw.githubusercontent.com/salesforce/ja3/master/lists/osx-nix-ja3.csv
+git clone https://github.com/trisulnsm/trisul-scripts.git
+git clone https://github.com/LeeBrotherston/tls-fingerprinting.git
+
+# Deployment, Bro
+    broctl deploy
+
+# Generate SSL traffic for bro log; Python web server with SSL (default port 8000)
+    # 2.X: python -m SimpleHTTPServer 7800
+    # 3.X: python -m http.server
+python << SimpleHTTPServerEOF
+import BaseHTTPServer, SimpleHTTPServer
+import ssl
+import os
+
+os.system("openssl req -new -x509 -keyout httpsTestDomain.pem -out httpsTestDomain.pem -days 365 -nodes")
+# os.system("openssl req -newkey rsa:2048 -nodes -keyout httpsTestDomain.key -x509 -days 365 -out httpsTestDomain.crt")
+
+httpd = BaseHTTPServer.HTTPServer(('localhost', 4443), SimpleHTTPServer.SimpleHTTPRequestHandler)
+httpd.socket = ssl.wrap_socket (httpd.socket, server_side=True, certfile='httpsTestDomain.pem')
+httpd.serve_forever()
+SimpleHTTPServerEOF
+
+# confirm finger printing is working with the JA3 hash plugin
+
+    tail /var/log/bro/current/ssl.log -n1
+
+# TODO ingest this into ELK and Moloch
+
